@@ -101,11 +101,7 @@ void inicializar_estado(Estado *e) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ESTÁGIOS DO PIPELINE
 // Ordem de execução dentro de ciclo_pipeline(): ER→MEM→EX→DI→BI
-// (de trás pra frente para não sobrescrever registradores antes de usá-los)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// BI — Busca de Instrução
-// Lê memoria[PC], incrementa PC, passa para BI/DI
 void estagio_BI(Estado *e) {
     if (e->PC >= 256) {
         e->bi_di.valido = 0;
@@ -309,18 +305,3 @@ void imprimir_pipeline(Estado *e) {
     }
 }
 
-void imprimir_estatisticas(Estado *e) {
-    printf("\n=== Estatísticas ===\n");
-    printf("Ciclos executados : %d\n", e->ciclos);
-    printf("Instruções concluídas: %d\n", e->instrucoes);
-    printf("Bolhas inseridas  : %d\n", e->bolhas);
-    if (e->instrucoes > 0)
-        printf("CPI médio         : %.2f\n", (double)e->ciclos / e->instrucoes);
-    printf("\n--- Por tipo ---\n");
-    printf("Tipo R : %d\n", e->qtd_tipo_r);
-    printf("ADDI   : %d\n", e->qtd_addi);
-    printf("BEQ    : %d\n", e->qtd_beq);
-    printf("LW     : %d\n", e->qtd_lw);
-    printf("SW     : %d\n", e->qtd_sw);
-    printf("JUMP   : %d\n", e->qtd_jump);
-}
