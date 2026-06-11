@@ -13,7 +13,7 @@ Decode campos(int instrucao) {
     c.funct  =  instrucao        & 0x7;
     c.imm    =  instrucao        & 0x3F;
     c.addr   =  instrucao        & 0xFF;
-    if (c.imm >= 32) c.imm -= 64; // extensão de sinal 6 bits
+    if (c.imm >= 32) c.imm -= 64;
     return c;
 }
 
@@ -29,8 +29,8 @@ int controle_ULA(int opcode, int funct) {
             }
         case OP_ADDI:
         case OP_LW:
-        case OP_SW:  return 0; // ADD para calcular endereço/imediato
-        case OP_BEQ: return 2; // SUB para comparar
+        case OP_SW:  return 0;
+        case OP_BEQ: return 2;
         default:     return -1;
     }
 }
@@ -90,8 +90,6 @@ int leitura_arquivo_mem(int memoria[], char nome_arquivo[]) {
 
 void inicializar_estado(Estado *e) {
     memset(e, 0, sizeof(Estado));
-    // registradores e memória já zerados pelo memset
-    // registradores de pipeline marcados como inválidos (bolha)
     e->bi_di.valido  = 0;
     e->di_ex.valido  = 0;
     e->ex_mem.valido = 0;
@@ -102,6 +100,7 @@ void inicializar_estado(Estado *e) {
 // ESTÁGIOS DO PIPELINE
 // Ordem de execução dentro de ciclo_pipeline(): ER→MEM→EX→DI→BI
 // ─────────────────────────────────────────────────────────────────────────────
+
 void estagio_BI(Estado *e) {
     if (e->PC >= 256) {
         e->bi_di.valido = 0;
@@ -113,23 +112,20 @@ void estagio_BI(Estado *e) {
     e->PC++;
 }
 
-// DI — Decodificação e leitura de registradores
-// Decodifica instrução de BI/DI, lê A=reg[rs] e B=reg[rt], passa para DI/EX
 void estagio_DI(Estado *e) {
     if (!e->bi_di.valido) {
         e->di_ex.valido = 0;
         return;
     }
     Decode c = campos(e->bi_di.instrucao);
-    e->di_ex.c        = c;
-    e->di_ex.A        = e->registradores[c.rs];
-    e->di_ex.B        = e->registradores[c.rt];
-    e->di_ex.PC_mais1 = e->bi_di.PC_mais1;
-    e->di_ex.valido   = 1;
+    e->di_ex.c            = c;
+    e->di_ex.instrucao_raw = e->bi_di.instrucao;  // FIX: guarda bruta para imprimir
+    e->di_ex.A            = e->registradores[c.rs];
+    e->di_ex.B            = e->registradores[c.rt];
+    e->di_ex.PC_mais1     = e->bi_di.PC_mais1;
+    e->di_ex.valido       = 1;
 }
 
-// EX — Execução na ULA
-// Calcula resultado, prepara destino e endereços de desvio
 void estagio_EX(Estado *e) {
     if (!e->di_ex.valido) {
         e->ex_mem.valido = 0;
@@ -140,7 +136,7 @@ void estagio_EX(Estado *e) {
     int B      = e->di_ex.B;
     int flag   = 0;
     int ctrl   = controle_ULA(c.opcode, c.funct);
-    int op2    = (c.opcode == OP_TIPO_R) ? B : c.imm; // tipo R usa rt, senão usa imm
+    int op2    = (c.opcode == OP_TIPO_R) ? B : c.imm;
     int result = ULA(A, op2, ctrl, &flag);
 
     e->ex_mem.ULAout    = result;
@@ -148,21 +144,17 @@ void estagio_EX(Estado *e) {
     e->ex_mem.zero      = flag;
     e->ex_mem.opcode    = c.opcode;
     e->ex_mem.addr      = c.addr;
-    e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm; // alvo do BEQ
+    e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm;
+    e->ex_mem.rd_dest   = (c.opcode == OP_TIPO_R) ? c.rd : c.rt;
     e->ex_mem.valido    = 1;
-
-    // Define registrador destino: tipo R usa rd, demais usam rt
-    e->ex_mem.rd_dest = (c.opcode == OP_TIPO_R) ? c.rd : c.rt;
 }
 
-// MEM — Acesso à memória
-// LW lê, SW escreve, BEQ/JUMP redirecionam o PC
 void estagio_MEM(Estado *e) {
     if (!e->ex_mem.valido) {
         e->mem_er.valido = 0;
         return;
     }
-    int opcode  = e->ex_mem.opcode;
+    int opcode   = e->ex_mem.opcode;
     int endereco = e->ex_mem.ULAout;
     int resultado = e->ex_mem.ULAout;
 
@@ -184,7 +176,6 @@ void estagio_MEM(Estado *e) {
         case OP_BEQ:
             if (e->ex_mem.zero) {
                 e->PC = e->ex_mem.PC_branch;
-                // descarta instruções buscadas indevidamente (flush)
                 e->bi_di.valido = 0;
                 e->di_ex.valido = 0;
                 e->bolhas += 2;
@@ -205,12 +196,21 @@ void estagio_MEM(Estado *e) {
     e->mem_er.valido    = 1;
 }
 
-// ER — Escrita no registrador (Write Back)
-// Escreve resultado em registradores[rd_dest], exceto SW/BEQ/JUMP
 void estagio_ER(Estado *e) {
     if (!e->mem_er.valido) return;
 
     int opcode = e->mem_er.opcode;
+
+    // FIX: conta todas as instruções antes de qualquer return antecipado
+    e->instrucoes++;
+    switch (opcode) {
+        case OP_TIPO_R: e->qtd_tipo_r++; break;
+        case OP_ADDI:   e->qtd_addi++;   break;
+        case OP_LW:     e->qtd_lw++;     break;
+        case OP_SW:     e->qtd_sw++;     break;
+        case OP_BEQ:    e->qtd_beq++;    break;
+        case OP_JUMP:   e->qtd_jump++;   break;
+    }
 
     // SW, BEQ e JUMP não escrevem em registrador
     if (opcode == OP_SW || opcode == OP_BEQ || opcode == OP_JUMP) {
@@ -218,16 +218,10 @@ void estagio_ER(Estado *e) {
         return;
     }
 
-    e->registradores[e->mem_er.rd_dest] = e->mem_er.resultado;
-    e->instrucoes++;
+    // FIX: protege $0 (hardwired zero)
+    if (e->mem_er.rd_dest != 0)
+        e->registradores[e->mem_er.rd_dest] = e->mem_er.resultado;
 
-    // Contagem por tipo
-    switch (opcode) {
-        case OP_TIPO_R: e->qtd_tipo_r++; break;
-        case OP_ADDI:   e->qtd_addi++;   break;
-        case OP_LW:     e->qtd_lw++;     break;
-        default: break;
-    }
     e->mem_er.valido = 0;
 }
 
@@ -235,8 +229,6 @@ void estagio_ER(Estado *e) {
 // CICLO E RUN
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Executa um ciclo completo do pipeline (todos os 5 estágios)
-// Ordem reversa para não corromper dados entre estágios no mesmo ciclo
 void ciclo_pipeline(Estado *e) {
     estagio_ER(e);
     estagio_MEM(e);
@@ -246,7 +238,6 @@ void ciclo_pipeline(Estado *e) {
     e->ciclos++;
 }
 
-// Executa até todos os estágios estarem vazios e PC ter passado das instruções
 void run(Estado *e, int num_instrucoes) {
     while (e->PC < num_instrucoes ||
            e->bi_di.valido  ||
@@ -270,38 +261,49 @@ void imprimir_registradores(Estado *e) {
 
 void imprimir_pipeline(Estado *e) {
     char buf[64];
-    printf("\n=== Estado do Pipeline ===\n");
+    printf("\n=== Estado do Pipeline (ciclo %d) ===\n", e->ciclos);
 
     if (e->bi_di.valido) {
         instrucao_para_asm(e->bi_di.instrucao, buf);
-        printf("BI/DI : %s (PC+1=%d)\n", buf, e->bi_di.PC_mais1);
+        printf("BI/DI  : %-30s  PC+1=%d\n", buf, e->bi_di.PC_mais1);
     } else {
-        printf("BI/DI : [bolha]\n");
+        printf("BI/DI  : [bolha]\n");
     }
 
     if (e->di_ex.valido) {
-        instrucao_para_asm(0, buf);
-        printf("DI/EX : op=%d rs=%d rt=%d rd=%d imm=%d | A=%d B=%d\n",
-            e->di_ex.c.opcode, e->di_ex.c.rs, e->di_ex.c.rt,
-            e->di_ex.c.rd, e->di_ex.c.imm,
-            e->di_ex.A, e->di_ex.B);
+        // FIX: usa instrucao_raw guardada no estágio DI
+        instrucao_para_asm(e->di_ex.instrucao_raw, buf);
+        printf("DI/EX  : %-30s  A=%d B=%d\n", buf, e->di_ex.A, e->di_ex.B);
     } else {
-        printf("DI/EX : [bolha]\n");
+        printf("DI/EX  : [bolha]\n");
     }
 
     if (e->ex_mem.valido) {
-        printf("EX/MEM: ULAout=%d zero=%d rd_dest=$%d opcode=%d\n",
-            e->ex_mem.ULAout, e->ex_mem.zero,
-            e->ex_mem.rd_dest, e->ex_mem.opcode);
+        printf("EX/MEM : %-30s  ULAout=%d zero=%d rd_dest=$%d\n",
+            "", e->ex_mem.ULAout, e->ex_mem.zero, e->ex_mem.rd_dest);
     } else {
-        printf("EX/MEM: [bolha]\n");
+        printf("EX/MEM : [bolha]\n");
     }
 
     if (e->mem_er.valido) {
-        printf("MEM/ER: resultado=%d rd_dest=$%d opcode=%d\n",
-            e->mem_er.resultado, e->mem_er.rd_dest, e->mem_er.opcode);
+        printf("MEM/ER : %-30s  resultado=%d rd_dest=$%d\n",
+            "", e->mem_er.resultado, e->mem_er.rd_dest);
     } else {
-        printf("MEM/ER: [bolha]\n");
+        printf("MEM/ER : [bolha]\n");
     }
 }
 
+void imprimir_estatisticas(Estado *e) {
+    printf("\n=== Estatísticas ===\n");
+    printf("Ciclos executados : %d\n", e->ciclos);
+    printf("Instruções        : %d\n", e->instrucoes);
+    printf("  Tipo R          : %d\n", e->qtd_tipo_r);
+    printf("  addi            : %d\n", e->qtd_addi);
+    printf("  lw              : %d\n", e->qtd_lw);
+    printf("  sw              : %d\n", e->qtd_sw);
+    printf("  beq             : %d\n", e->qtd_beq);
+    printf("  jump            : %d\n", e->qtd_jump);
+    printf("Bolhas inseridas  : %d\n", e->bolhas);
+    if (e->ciclos > 0)
+        printf("CPI               : %.2f\n", (float)e->ciclos / e->instrucoes);
+}
