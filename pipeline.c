@@ -95,7 +95,9 @@ void inicializar_estado(Estado *e) {
     e->mem_er.valido = 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // ESTÁGIOS DO PIPELINE
+// ─────────────────────────────────────────────────────────────────────────────
 
 void estagio_BI(Estado *e) {
     if (e->PC >= 256) {
@@ -143,4 +145,51 @@ void estagio_EX(Estado *e) {
     e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm;
     e->ex_mem.rd_dest   = (c.opcode == OP_TIPO_R) ? c.rd : c.rt;
     e->ex_mem.valido    = 1;
+}
+
+void estagio_MEM(Estado *e) {
+    if (!e->ex_mem.valido) {
+        e->mem_er.valido = 0;
+        return;
+    }
+    int opcode    = e->ex_mem.opcode;
+    int endereco  = e->ex_mem.ULAout;
+    int resultado = e->ex_mem.ULAout;
+
+    switch (opcode) {
+        case OP_LW:
+            if (endereco >= 0 && endereco < 256)
+                resultado = e->memoria[endereco];
+            else
+                printf("[MEM] Erro: endereço LW fora dos limites (%d)\n", endereco);
+            break;
+
+        case OP_SW:
+            if (endereco >= 0 && endereco < 256)
+                e->memoria[endereco] = e->ex_mem.B;
+            else
+                printf("[MEM] Erro: endereço SW fora dos limites (%d)\n", endereco);
+            break;
+
+        case OP_BEQ:
+            if (e->ex_mem.zero) {
+                e->PC = e->ex_mem.PC_branch;
+                e->bi_di.valido = 0;
+                e->di_ex.valido = 0;
+                e->bolhas += 2;
+            }
+            break;
+
+        case OP_JUMP:
+            e->PC = e->ex_mem.addr;
+            e->bi_di.valido = 0;
+            e->di_ex.valido = 0;
+            e->bolhas += 2;
+            break;
+    }
+
+    e->mem_er.resultado = resultado;
+    e->mem_er.rd_dest   = e->ex_mem.rd_dest;
+    e->mem_er.opcode    = opcode;
+    e->mem_er.valido    = 1;
 }
