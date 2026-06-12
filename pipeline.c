@@ -3,7 +3,6 @@
 #include <string.h>
 #include "simulador.h"
 
-
 Decode campos(int instrucao) {
     Decode c;
     c.opcode = (instrucao >> 12) & 0xF;
@@ -96,10 +95,7 @@ void inicializar_estado(Estado *e) {
     e->mem_er.valido = 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // ESTÁGIOS DO PIPELINE
-// Ordem de execução dentro de ciclo_pipeline(): ER→MEM→EX→DI→BI
-// ─────────────────────────────────────────────────────────────────────────────
 
 void estagio_BI(Estado *e) {
     if (e->PC >= 256) {
@@ -118,12 +114,12 @@ void estagio_DI(Estado *e) {
         return;
     }
     Decode c = campos(e->bi_di.instrucao);
-    e->di_ex.c            = c;
-    e->di_ex.instrucao_raw = e->bi_di.instrucao;  // FIX: guarda bruta para imprimir
-    e->di_ex.A            = e->registradores[c.rs];
-    e->di_ex.B            = e->registradores[c.rt];
-    e->di_ex.PC_mais1     = e->bi_di.PC_mais1;
-    e->di_ex.valido       = 1;
+    e->di_ex.c             = c;
+    e->di_ex.instrucao_raw = e->bi_di.instrucao;
+    e->di_ex.A             = e->registradores[c.rs];
+    e->di_ex.B             = e->registradores[c.rt];
+    e->di_ex.PC_mais1      = e->bi_di.PC_mais1;
+    e->di_ex.valido        = 1;
 }
 
 void estagio_EX(Estado *e) {
@@ -147,163 +143,4 @@ void estagio_EX(Estado *e) {
     e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm;
     e->ex_mem.rd_dest   = (c.opcode == OP_TIPO_R) ? c.rd : c.rt;
     e->ex_mem.valido    = 1;
-}
-
-void estagio_MEM(Estado *e) {
-    if (!e->ex_mem.valido) {
-        e->mem_er.valido = 0;
-        return;
-    }
-    int opcode   = e->ex_mem.opcode;
-    int endereco = e->ex_mem.ULAout;
-    int resultado = e->ex_mem.ULAout;
-
-    switch (opcode) {
-        case OP_LW:
-            if (endereco >= 0 && endereco < 256)
-                resultado = e->memoria[endereco];
-            else
-                printf("[MEM] Erro: endereço LW fora dos limites (%d)\n", endereco);
-            break;
-
-        case OP_SW:
-            if (endereco >= 0 && endereco < 256)
-                e->memoria[endereco] = e->ex_mem.B;
-            else
-                printf("[MEM] Erro: endereço SW fora dos limites (%d)\n", endereco);
-            break;
-
-        case OP_BEQ:
-            if (e->ex_mem.zero) {
-                e->PC = e->ex_mem.PC_branch;
-                e->bi_di.valido = 0;
-                e->di_ex.valido = 0;
-                e->bolhas += 2;
-            }
-            break;
-
-        case OP_JUMP:
-            e->PC = e->ex_mem.addr;
-            e->bi_di.valido = 0;
-            e->di_ex.valido = 0;
-            e->bolhas += 2;
-            break;
-    }
-
-    e->mem_er.resultado = resultado;
-    e->mem_er.rd_dest   = e->ex_mem.rd_dest;
-    e->mem_er.opcode    = opcode;
-    e->mem_er.valido    = 1;
-}
-
-void estagio_ER(Estado *e) {
-    if (!e->mem_er.valido) return;
-
-    int opcode = e->mem_er.opcode;
-
-    // FIX: conta todas as instruções antes de qualquer return antecipado
-    e->instrucoes++;
-    switch (opcode) {
-        case OP_TIPO_R: e->qtd_tipo_r++; break;
-        case OP_ADDI:   e->qtd_addi++;   break;
-        case OP_LW:     e->qtd_lw++;     break;
-        case OP_SW:     e->qtd_sw++;     break;
-        case OP_BEQ:    e->qtd_beq++;    break;
-        case OP_JUMP:   e->qtd_jump++;   break;
-    }
-
-    // SW, BEQ e JUMP não escrevem em registrador
-    if (opcode == OP_SW || opcode == OP_BEQ || opcode == OP_JUMP) {
-        e->mem_er.valido = 0;
-        return;
-    }
-
-    // FIX: protege $0 (hardwired zero)
-    if (e->mem_er.rd_dest != 0)
-        e->registradores[e->mem_er.rd_dest] = e->mem_er.resultado;
-
-    e->mem_er.valido = 0;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CICLO E RUN
-// ─────────────────────────────────────────────────────────────────────────────
-
-void ciclo_pipeline(Estado *e) {
-    estagio_ER(e);
-    estagio_MEM(e);
-    estagio_EX(e);
-    estagio_DI(e);
-    estagio_BI(e);
-    e->ciclos++;
-}
-
-void run(Estado *e, int num_instrucoes) {
-    while (e->PC < num_instrucoes ||
-           e->bi_di.valido  ||
-           e->di_ex.valido  ||
-           e->ex_mem.valido ||
-           e->mem_er.valido) {
-        ciclo_pipeline(e);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPRESSÃO
-// ─────────────────────────────────────────────────────────────────────────────
-
-void imprimir_registradores(Estado *e) {
-    printf("\n=== Registradores ===\n");
-    for (int i = 0; i < 8; i++)
-        printf("$%d = %d\n", i, e->registradores[i]);
-    printf("PC = %d\n", e->PC);
-}
-
-void imprimir_pipeline(Estado *e) {
-    char buf[64];
-    printf("\n=== Estado do Pipeline (ciclo %d) ===\n", e->ciclos);
-
-    if (e->bi_di.valido) {
-        instrucao_para_asm(e->bi_di.instrucao, buf);
-        printf("BI/DI  : %-30s  PC+1=%d\n", buf, e->bi_di.PC_mais1);
-    } else {
-        printf("BI/DI  : [bolha]\n");
-    }
-
-    if (e->di_ex.valido) {
-        // FIX: usa instrucao_raw guardada no estágio DI
-        instrucao_para_asm(e->di_ex.instrucao_raw, buf);
-        printf("DI/EX  : %-30s  A=%d B=%d\n", buf, e->di_ex.A, e->di_ex.B);
-    } else {
-        printf("DI/EX  : [bolha]\n");
-    }
-
-    if (e->ex_mem.valido) {
-        printf("EX/MEM : %-30s  ULAout=%d zero=%d rd_dest=$%d\n",
-            "", e->ex_mem.ULAout, e->ex_mem.zero, e->ex_mem.rd_dest);
-    } else {
-        printf("EX/MEM : [bolha]\n");
-    }
-
-    if (e->mem_er.valido) {
-        printf("MEM/ER : %-30s  resultado=%d rd_dest=$%d\n",
-            "", e->mem_er.resultado, e->mem_er.rd_dest);
-    } else {
-        printf("MEM/ER : [bolha]\n");
-    }
-}
-
-void imprimir_estatisticas(Estado *e) {
-    printf("\n=== Estatísticas ===\n");
-    printf("Ciclos executados : %d\n", e->ciclos);
-    printf("Instruções        : %d\n", e->instrucoes);
-    printf("  Tipo R          : %d\n", e->qtd_tipo_r);
-    printf("  addi            : %d\n", e->qtd_addi);
-    printf("  lw              : %d\n", e->qtd_lw);
-    printf("  sw              : %d\n", e->qtd_sw);
-    printf("  beq             : %d\n", e->qtd_beq);
-    printf("  jump            : %d\n", e->qtd_jump);
-    printf("Bolhas inseridas  : %d\n", e->bolhas);
-    if (e->ciclos > 0)
-        printf("CPI               : %.2f\n", (float)e->ciclos / e->instrucoes);
 }
