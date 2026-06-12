@@ -212,3 +212,22 @@ void estagio_ER(Estado *e) {
 
     e->mem_er.valido = 0;
 }
+
+void ciclo_pipeline(Estado *e) {
+    estagio_ER(e);
+    estagio_MEM(e);
+    estagio_EX(e);
+    estagio_DI(e);
+    estagio_BI(e);
+    e->ciclos++;
+}
+
+void run(Estado *e, int num_instrucoes) {
+    while (e->PC < num_instrucoes ||
+           e->bi_di.valido        ||
+           e->di_ex.valido        ||
+           e->ex_mem.valido       ||
+           e->mem_er.valido) {
+        ciclo_pipeline(e);
+    }
+}
