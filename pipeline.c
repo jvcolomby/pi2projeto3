@@ -95,10 +95,6 @@ void inicializar_estado(Estado *e) {
     e->mem_er.valido = 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ESTÁGIOS DO PIPELINE
-// ─────────────────────────────────────────────────────────────────────────────
-
 void estagio_BI(Estado *e) {
     if (e->PC >= 256) {
         e->bi_di.valido = 0;
@@ -163,14 +159,12 @@ void estagio_MEM(Estado *e) {
             else
                 printf("[MEM] Erro: endereço LW fora dos limites (%d)\n", endereco);
             break;
-
         case OP_SW:
             if (endereco >= 0 && endereco < 256)
                 e->memoria[endereco] = e->ex_mem.B;
             else
                 printf("[MEM] Erro: endereço SW fora dos limites (%d)\n", endereco);
             break;
-
         case OP_BEQ:
             if (e->ex_mem.zero) {
                 e->PC = e->ex_mem.PC_branch;
@@ -179,7 +173,6 @@ void estagio_MEM(Estado *e) {
                 e->bolhas += 2;
             }
             break;
-
         case OP_JUMP:
             e->PC = e->ex_mem.addr;
             e->bi_di.valido = 0;
@@ -192,4 +185,30 @@ void estagio_MEM(Estado *e) {
     e->mem_er.rd_dest   = e->ex_mem.rd_dest;
     e->mem_er.opcode    = opcode;
     e->mem_er.valido    = 1;
+}
+
+void estagio_ER(Estado *e) {
+    if (!e->mem_er.valido) return;
+
+    int opcode = e->mem_er.opcode;
+
+    e->instrucoes++;
+    switch (opcode) {
+        case OP_TIPO_R: e->qtd_tipo_r++; break;
+        case OP_ADDI:   e->qtd_addi++;   break;
+        case OP_LW:     e->qtd_lw++;     break;
+        case OP_SW:     e->qtd_sw++;     break;
+        case OP_BEQ:    e->qtd_beq++;    break;
+        case OP_JUMP:   e->qtd_jump++;   break;
+    }
+
+    if (opcode == OP_SW || opcode == OP_BEQ || opcode == OP_JUMP) {
+        e->mem_er.valido = 0;
+        return;
+    }
+
+    if (e->mem_er.rd_dest != 0)
+        e->registradores[e->mem_er.rd_dest] = e->mem_er.resultado;
+
+    e->mem_er.valido = 0;
 }
