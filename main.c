@@ -49,12 +49,39 @@ static void tela_registradores(Estado *e) {
 // ─── Tela de assembly ─────────────────────────────────────────────────────────
 static void tela_assembly(Estado *e, int n) {
     WINDOW *w = abrir_resultado("Assembly");
-    for (int i = 0; i < n && i < RES_H - 4; i++) {
-        char buf[64];
-        instrucao_para_asm(e->mem_instrucoes[i], buf);
-        mvwprintw(w, 2 + i, 4, "[%2d] %s", i, buf);
+    int offset = 0;
+    int max_linhas = RES_H - 4;
+    int ch;
+
+    while (1) {
+        werase(w);
+        box(w, 0, 0);
+        mvwprintw(w, 0, (RES_W - 10) / 2, " Assembly ");
+
+        for (int i = 0; i < max_linhas && (i + offset) < n; i++) {
+            char buf[64];
+            instrucao_para_asm(e->mem_instrucoes[i + offset], buf);
+            mvwprintw(w, 2 + i, 4, "[%2d] %s", i + offset, buf);
+        }
+
+        wattron(w, A_DIM);
+        mvwprintw(w, RES_H - 2, 2, "Setas Cima/Baixo para rolar | 'q' para sair");
+        wattroff(w, A_DIM);
+        wrefresh(w);
+
+        ch = wgetch(w);
+        
+        if (ch == 'q' || ch == 'Q' || ch == '\n') {
+            break;
+        }
+        if (ch == KEY_DOWN && offset + max_linhas < n) {
+            offset++;
+        }
+        if (ch == KEY_UP && offset > 0) {
+            offset--;
+        }
     }
-    aguardar(w, RES_H - 2);
+
     fechar_resultado(w);
 }
 
@@ -257,8 +284,14 @@ int main() {
                         aguardar(w, RES_H - 2);
                         fechar_resultado(w);
                     } else {
+                        endwin();
+                        
                         run(&e, n);
-                        tela_registradores(&e);
+                        
+                        printf("\n[Pressione ENTER para retornar ao menu...]");
+                        getchar();
+                        
+                        refresh();
                     }
                     break;
                 case 4: { // Step

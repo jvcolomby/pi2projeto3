@@ -224,12 +224,19 @@ void ciclo_pipeline(Estado *e) {
 
 void run(Estado *e, int num_instrucoes) {
     while (e->PC < num_instrucoes ||
-           e->bi_di.valido        ||
-           e->di_ex.valido        ||
-           e->ex_mem.valido       ||
-           e->mem_er.valido) {
+        e->bi_di.valido        ||
+        e->di_ex.valido        ||
+        e->ex_mem.valido       ||
+        e->mem_er.valido) {
+        
         ciclo_pipeline(e);
+
+        printf("\n==================================================");
+        imprimir_pipeline(e);
+        imprimir_registradores(e);
     }
+    
+    printf("\n--- Execucao concluida ---\n");
 }
 
 void imprimir_registradores(Estado *e) {
