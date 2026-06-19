@@ -55,7 +55,8 @@ typedef struct {
 } Reg_MEM_ER;
 
 typedef struct {
-    int memoria[256];
+    int mem_instrucoes[256];
+    int mem_dados[256];
     int registradores[8];
     int PC;
     Reg_BI_DI  bi_di;
@@ -77,7 +78,7 @@ Decode  campos(int instrucao);
 int     ULA(int A, int B, int controle, int *flag_zero);
 int     controle_ULA(int opcode, int funct);
 void    instrucao_para_asm(int instrucao, char *buf);
-int     leitura_arquivo_mem(int memoria[], char nome_arquivo[]);
+int     leitura_arquivo_mem(int mem_instrucoes[], char nome_arquivo[]);
 void    inicializar_estado(Estado *e);
 
 void    estagio_BI (Estado *e);

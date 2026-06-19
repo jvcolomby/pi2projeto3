@@ -46,7 +46,7 @@ int main() {
                 getchar();
                 inicializar_estado(&e);
                 estagio_atual = 0;
-                n = leitura_arquivo_mem(e.memoria, nome);
+                n = leitura_arquivo_mem(e.mem_instrucoes, nome);
                 if (n > 0)
                     printf("Arquivo carregado: %s (%d instrucoes)\n", nome, n);
                 break;
@@ -59,7 +59,7 @@ int main() {
                 printf("\n=== Assembly ===\n");
                 for (int i = 0; i < n; i++) {
                     char buf[64];
-                    instrucao_para_asm(e.memoria[i], buf);
+                    instrucao_para_asm(e.mem_instrucoes[i], buf);
                     printf("  mem[%d]: %s\n", i, buf);
                 }
                 break;
