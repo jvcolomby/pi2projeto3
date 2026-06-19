@@ -70,7 +70,7 @@ void instrucao_para_asm(int instrucao, char *buf) {
     sprintf(buf, "??? (op=%d)", c.opcode);
 }
 
-int leitura_arquivo_mem(int memoria[], char nome_arquivo[]) {
+int leitura_arquivo_mem(int mem_instrucoes[], char nome_arquivo[]) {
     FILE *arquivo = fopen(nome_arquivo, "r");
     if (!arquivo) { printf("Erro ao abrir %s\n", nome_arquivo); return 0; }
     char linha[200];
@@ -81,7 +81,7 @@ int leitura_arquivo_mem(int memoria[], char nome_arquivo[]) {
         linha[strcspn(linha, "\r\n")] = '\0';
         char *tok = strtok(linha, " \t");
         if (!tok || tok[0] == '\0') continue;
-        memoria[i++] = (int)strtol(tok, NULL, 2);
+        mem_instrucoes[i++] = (int)strtol(tok, NULL, 2);
     }
     fclose(arquivo);
     return i;
@@ -100,7 +100,7 @@ void estagio_BI(Estado *e) {
         e->bi_di.valido = 0;
         return;
     }
-    e->bi_di.instrucao = e->memoria[e->PC];
+    e->bi_di.instrucao = e->mem_instrucoes[e->PC];
     e->bi_di.PC_mais1  = e->PC + 1;
     e->bi_di.valido    = 1;
     e->PC++;
@@ -130,7 +130,7 @@ void estagio_EX(Estado *e) {
     int B      = e->di_ex.B;
     int flag   = 0;
     int ctrl   = controle_ULA(c.opcode, c.funct);
-    int op2    = (c.opcode == OP_TIPO_R) ? B : c.imm;
+    int op2    = (c.opcode == OP_TIPO_R || c.opcode == OP_BEQ) ? B : c.imm;
     int result = ULA(A, op2, ctrl, &flag);
 
     e->ex_mem.ULAout    = result;
@@ -155,13 +155,13 @@ void estagio_MEM(Estado *e) {
     switch (opcode) {
         case OP_LW:
             if (endereco >= 0 && endereco < 256)
-                resultado = e->memoria[endereco];
+                resultado = e->mem_dados[endereco];
             else
                 printf("[MEM] Erro: endereço LW fora dos limites (%d)\n", endereco);
             break;
         case OP_SW:
             if (endereco >= 0 && endereco < 256)
-                e->memoria[endereco] = e->ex_mem.B;
+                e->mem_dados[endereco] = e->ex_mem.B;
             else
                 printf("[MEM] Erro: endereço SW fora dos limites (%d)\n", endereco);
             break;
