@@ -2,11 +2,14 @@
 #include <string.h>
 #include "simulador.h"
 
+static const char *nome_estagio[] = { "BI", "DI", "EX", "MEM", "ER" };
+
 int main() {
     Estado e;
     inicializar_estado(&e);
     int n = 0;
     int opcao;
+    int estagio_atual = 0;
 
     printf("\n");
     printf("         ---------------------------------------\n");
@@ -24,7 +27,7 @@ int main() {
         printf(" |         [3] Mostrar Assembly                     |\n");
         printf(" |                                                  |\n");
         printf(" |         [4] Executar programa  (Run)             |\n");
-        printf(" |         [5] Executar um ciclo  (Step)            |\n");
+        printf(" |         [5] Executar um estagio (Step)           |\n");
         printf(" |                                                  |\n");
         printf(" |         [6] Estado do pipeline                   |\n");
         printf(" |         [7] Estatisticas                         |\n");
@@ -42,6 +45,7 @@ int main() {
                 scanf("%s", nome);
                 getchar();
                 inicializar_estado(&e);
+                estagio_atual = 0;
                 n = leitura_arquivo_mem(e.memoria, nome);
                 if (n > 0)
                     printf("Arquivo carregado: %s (%d instrucoes)\n", nome, n);
@@ -70,13 +74,25 @@ int main() {
             }
             case 5: {
                 if (n == 0) { printf("Carregue um arquivo .mem primeiro.\n"); break; }
-                if (e.PC < n || e.bi_di.valido || e.di_ex.valido ||
-                    e.ex_mem.valido || e.mem_er.valido) {
-                    ciclo_pipeline(&e);
-                    imprimir_pipeline(&e);
-                } else {
+                if (e.PC >= n && !e.bi_di.valido && !e.di_ex.valido &&
+                    !e.ex_mem.valido && !e.mem_er.valido) {
                     printf("Pipeline vazio.\n");
+                    break;
                 }
+                printf("\n--- Estagio: %s ---\n", nome_estagio[estagio_atual]);
+                switch (estagio_atual) {
+                    case 0: estagio_BI(&e);  break;
+                    case 1: estagio_DI(&e);  break;
+                    case 2: estagio_EX(&e);  break;
+                    case 3: estagio_MEM(&e); break;
+                    case 4: estagio_ER(&e);
+                            e.ciclos++;
+                            break;
+                }
+                imprimir_pipeline(&e);
+                estagio_atual = (estagio_atual + 1) % 5;
+                if (estagio_atual == 0)
+                    printf("\n>>> Ciclo %d completo\n", e.ciclos);
                 break;
             }
             case 6:
