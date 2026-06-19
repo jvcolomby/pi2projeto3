@@ -231,3 +231,94 @@ void run(Estado *e, int num_instrucoes) {
         ciclo_pipeline(e);
     }
 }
+
+void imprimir_registradores(Estado *e) {
+    printf("\n=== Registradores ===\n");
+    for (int i = 0; i < 8; i++)
+        printf("  $%d = %d\n", i, e->registradores[i]);
+    printf("  PC = %d\n", e->PC);
+}
+
+void imprimir_pipeline(Estado *e) {
+    char buf[64];
+    printf("\n=== Pipeline (ciclo %d) ===\n", e->ciclos);
+
+    printf("\n  BI/DI  : ");
+    if (e->bi_di.valido) {
+        instrucao_para_asm(e->bi_di.instrucao, buf);
+        printf("%s  |  PC+1=%d\n", buf, e->bi_di.PC_mais1);
+    } else {
+        printf("[bolha]\n");
+    }
+
+    printf("  DI/EX  : ");
+    if (e->di_ex.valido) {
+        instrucao_para_asm(e->di_ex.instrucao_raw, buf);
+        int op = e->di_ex.c.opcode;
+        if (op == OP_TIPO_R)
+            printf("%s  |  A=%d  B=%d  rd=$%d\n", buf, e->di_ex.A, e->di_ex.B, e->di_ex.c.rd);
+        else if (op == OP_BEQ)
+            printf("%s  |  A=%d  B=%d  imm=%d  PC+1=%d\n", buf, e->di_ex.A, e->di_ex.B, e->di_ex.c.imm, e->di_ex.PC_mais1);
+        else if (op == OP_JUMP)
+            printf("%s  |  addr=%d\n", buf, e->di_ex.c.addr);
+        else if (op == OP_SW)
+            printf("%s  |  A=%d  B=%d  imm=%d\n", buf, e->di_ex.A, e->di_ex.B, e->di_ex.c.imm);
+        else
+            printf("%s  |  A=%d  imm=%d  rt=$%d\n", buf, e->di_ex.A, e->di_ex.c.imm, e->di_ex.c.rt);
+    } else {
+        printf("[bolha]\n");
+    }
+
+    printf("  EX/MEM : ");
+    if (e->ex_mem.valido) {
+        int op = e->ex_mem.opcode;
+        if (op == OP_TIPO_R)
+            printf("tipo R    |  ULAout=%d  rd=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+        else if (op == OP_ADDI)
+            printf("addi      |  ULAout=%d  rt=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+        else if (op == OP_LW)
+            printf("lw        |  end=%d  rt=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+        else if (op == OP_SW)
+            printf("sw        |  end=%d  dado=%d\n", e->ex_mem.ULAout, e->ex_mem.B);
+        else if (op == OP_BEQ)
+            printf("beq       |  zero=%d  PC_branch=%d\n", e->ex_mem.zero, e->ex_mem.PC_branch);
+        else if (op == OP_JUMP)
+            printf("jump      |  addr=%d\n", e->ex_mem.addr);
+        else
+            printf("op=%d  |  ULAout=%d\n", op, e->ex_mem.ULAout);
+    } else {
+        printf("[bolha]\n");
+    }
+
+    printf("  MEM/ER : ");
+    if (e->mem_er.valido) {
+        int op = e->mem_er.opcode;
+        if (op == OP_SW || op == OP_BEQ || op == OP_JUMP)
+            printf("%-6s    |  (sem writeback)\n",
+                op == OP_SW ? "sw" : op == OP_BEQ ? "beq" : "jump");
+        else
+            printf("%-6s    |  resultado=%d  rd=$%d\n",
+                op == OP_TIPO_R ? "tipo R" : op == OP_ADDI ? "addi" : "lw",
+                e->mem_er.resultado, e->mem_er.rd_dest);
+    } else {
+        printf("[bolha]\n");
+    }
+    printf("\n");
+}
+
+
+
+void imprimir_estatisticas(Estado *e) {
+    printf("\n=== Estatísticas ===\n");
+    printf("  Ciclos       : %d\n", e->ciclos);
+    printf("  Instruções   : %d\n", e->instrucoes);
+    printf("    Tipo R     : %d\n", e->qtd_tipo_r);
+    printf("    addi       : %d\n", e->qtd_addi);
+    printf("    lw         : %d\n", e->qtd_lw);
+    printf("    sw         : %d\n", e->qtd_sw);
+    printf("    beq        : %d\n", e->qtd_beq);
+    printf("    jump       : %d\n", e->qtd_jump);
+    printf("  Bolhas       : %d\n", e->bolhas);
+    if (e->instrucoes > 0)
+        printf("  CPI          : %.2f\n", (float)e->ciclos / e->instrucoes);
+}
