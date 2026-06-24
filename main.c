@@ -1,372 +1,421 @@
+#include <ncurses.h>
 #include <stdio.h>
 #include <string.h>
-#include <ncurses.h>
+
 #include "simulador.h"
 
-// ─── Dimensões ────────────────────────────────────────────────────────────────
-#define MENU_W   44
-#define MENU_H   13
-#define RES_W    60
-#define RES_H    24
+#define MENU_W 48
+#define MENU_H 14
+#define RES_W 60
+#define RES_H 24
+#define TOTAL_OPCOES 8
 
-static const char *nome_estagio[] = { "BI", "DI", "EX", "MEM", "ER" };
+typedef enum {
+    MENU_CARREGAR,
+    MENU_REGISTRADORES,
+    MENU_ASSEMBLY,
+    MENU_RUN,
+    MENU_STEP,
+    MENU_PIPELINE,
+    MENU_ESTATISTICAS,
+    MENU_SAIR
+} OpcaoMenu;
 
-// ─── Janela de resultado ──────────────────────────────────────────────────────
-static WINDOW *abrir_resultado(const char *titulo) {
-    int row = (LINES - RES_H) / 2;
-    int col = (COLS  - RES_W) / 2;
-    WINDOW *w = newwin(RES_H, RES_W, row, col);
-    keypad(w, TRUE);
-    box(w, 0, 0);
-    mvwprintw(w, 0, (RES_W - strlen(titulo)) / 2, " %s ", titulo);
-    return w;
+static int eh_enter(int tecla) {
+    return tecla == '\n' || tecla == '\r' || tecla == KEY_ENTER;
 }
 
-static void fechar_resultado(WINDOW *w) {
-    werase(w);
-    wrefresh(w);
-    delwin(w);
+static WINDOW *criar_janela(int altura, int largura, const char *titulo) {
+    int linha = (LINES - altura) / 2;
+    int coluna = (COLS - largura) / 2;
+    WINDOW *janela = newwin(altura, largura, linha, coluna);
+
+    if (!janela) return NULL;
+
+    keypad(janela, TRUE);
+    box(janela, 0, 0);
+    mvwprintw(janela, 0, (largura - (int)strlen(titulo) - 2) / 2,
+              " %s ", titulo);
+    return janela;
 }
 
-static void aguardar(WINDOW *w, int linha) {
-    wattron(w, A_DIM);
-    mvwprintw(w, linha, 2, "Pressione qualquer tecla...");
-    wattroff(w, A_DIM);
-    wrefresh(w);
-    wgetch(w);
+static void fechar_janela(WINDOW *janela) {
+    if (!janela) return;
+    werase(janela);
+    wrefresh(janela);
+    delwin(janela);
+    touchwin(stdscr);
+    refresh();
 }
 
-// ─── Tela de registradores ────────────────────────────────────────────────────
-static void tela_registradores(Estado *e) {
-    WINDOW *w = abrir_resultado("Registradores");
-    for (int i = 0; i < 8; i++)
-        mvwprintw(w, 2 + i, 4, "$%d = %d", i, e->registradores[i]);
-    mvwprintw(w, 11, 4, "PC = %d", e->PC);
-    aguardar(w, RES_H - 2);
-    fechar_resultado(w);
+static void aguardar(WINDOW *janela) {
+    wattron(janela, A_DIM);
+    mvwprintw(janela, RES_H - 2, 2, "Pressione ENTER para voltar...");
+    wattroff(janela, A_DIM);
+    wrefresh(janela);
+
+    int tecla;
+    do {
+        tecla = wgetch(janela);
+    } while (!eh_enter(tecla));
 }
 
-// ─── Tela de assembly ─────────────────────────────────────────────────────────
-static void tela_assembly(Estado *e, int n) {
-    WINDOW *w = abrir_resultado("Assembly");
-    int offset = 0;
-    int max_linhas = RES_H - 4;
-    int ch;
-
-    while (1) {
-        werase(w);
-        box(w, 0, 0);
-        mvwprintw(w, 0, (RES_W - 10) / 2, " Assembly ");
-
-        for (int i = 0; i < max_linhas && (i + offset) < n; i++) {
-            char buf[64];
-            instrucao_para_asm(e->mem_instrucoes[i + offset], buf);
-            mvwprintw(w, 2 + i, 4, "[%2d] %s", i + offset, buf);
-        }
-
-        wattron(w, A_DIM);
-        mvwprintw(w, RES_H - 2, 2, "Setas Cima/Baixo para rolar | 'q' para sair");
-        wattroff(w, A_DIM);
-        wrefresh(w);
-
-        ch = wgetch(w);
-        
-        if (ch == 'q' || ch == 'Q' || ch == '\n') {
-            break;
-        }
-        if (ch == KEY_DOWN && offset + max_linhas < n) {
-            offset++;
-        }
-        if (ch == KEY_UP && offset > 0) {
-            offset--;
-        }
-    }
-
-    fechar_resultado(w);
+static void mostrar_aviso(const char *titulo, const char *mensagem) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, titulo);
+    if (!janela) return;
+    mvwprintw(janela, 3, 3, "%s", mensagem);
+    aguardar(janela);
+    fechar_janela(janela);
 }
 
-// ─── Tela de pipeline ─────────────────────────────────────────────────────────
-static void tela_pipeline(Estado *e) {
-    char buf[64];
-    WINDOW *w = abrir_resultado("Pipeline");
-    mvwprintw(w, 1, 2, "Ciclo: %d", e->ciclos);
-
-    // BI/DI
-    mvwprintw(w, 3, 2, "BI/DI  :");
-    if (e->bi_di.valido) {
-        instrucao_para_asm(e->bi_di.instrucao, buf);
-        mvwprintw(w, 3, 11, "%-20s PC+1=%d", buf, e->bi_di.PC_mais1);
-    } else mvwprintw(w, 3, 11, "[bolha]");
-
-    // DI/EX
-    mvwprintw(w, 5, 2, "DI/EX  :");
-    if (e->di_ex.valido) {
-        instrucao_para_asm(e->di_ex.instrucao_raw, buf);
-        mvwprintw(w, 5, 11, "%-20s", buf);
-        int op = e->di_ex.c.opcode;
-        if (op == OP_TIPO_R)
-            mvwprintw(w, 6, 11, "A=%d  B=%d  rd=$%d", e->di_ex.A, e->di_ex.B, e->di_ex.c.rd);
-        else if (op == OP_BEQ)
-            mvwprintw(w, 6, 11, "A=%d  B=%d  imm=%d", e->di_ex.A, e->di_ex.B, e->di_ex.c.imm);
-        else if (op == OP_SW)
-            mvwprintw(w, 6, 11, "A=%d  B=%d  imm=%d", e->di_ex.A, e->di_ex.B, e->di_ex.c.imm);
-        else if (op == OP_JUMP)
-            mvwprintw(w, 6, 11, "addr=%d", e->di_ex.c.addr);
-        else
-            mvwprintw(w, 6, 11, "A=%d  imm=%d  rt=$%d", e->di_ex.A, e->di_ex.c.imm, e->di_ex.c.rt);
-    } else mvwprintw(w, 5, 11, "[bolha]");
-
-    // EX/MEM
-    mvwprintw(w, 8, 2, "EX/MEM :");
-    if (e->ex_mem.valido) {
-        int op = e->ex_mem.opcode;
-        if (op == OP_TIPO_R)
-            mvwprintw(w, 8, 11, "tipo R   ULAout=%d  rd=$%d", e->ex_mem.ULAout, e->ex_mem.rd_dest);
-        else if (op == OP_ADDI)
-            mvwprintw(w, 8, 11, "addi     ULAout=%d  rt=$%d", e->ex_mem.ULAout, e->ex_mem.rd_dest);
-        else if (op == OP_LW)
-            mvwprintw(w, 8, 11, "lw       end=%d  rt=$%d", e->ex_mem.ULAout, e->ex_mem.rd_dest);
-        else if (op == OP_SW)
-            mvwprintw(w, 8, 11, "sw       end=%d  dado=%d", e->ex_mem.ULAout, e->ex_mem.B);
-        else if (op == OP_BEQ)
-            mvwprintw(w, 8, 11, "beq      zero=%d  PC_branch=%d", e->ex_mem.zero, e->ex_mem.PC_branch);
-        else if (op == OP_JUMP)
-            mvwprintw(w, 8, 11, "jump     addr=%d", e->ex_mem.addr);
-    } else mvwprintw(w, 8, 11, "[bolha]");
-
-    // MEM/ER
-    mvwprintw(w, 10, 2, "MEM/ER :");
-    if (e->mem_er.valido) {
-        int op = e->mem_er.opcode;
-        if (op == OP_SW || op == OP_BEQ || op == OP_JUMP)
-            mvwprintw(w, 10, 11, "%-6s   (sem writeback)",
-                op == OP_SW ? "sw" : op == OP_BEQ ? "beq" : "jump");
-        else
-            mvwprintw(w, 10, 11, "%-6s   resultado=%d  rd=$%d",
-                op == OP_TIPO_R ? "tipo R" : op == OP_ADDI ? "addi" : "lw",
-                e->mem_er.resultado, e->mem_er.rd_dest);
-    } else mvwprintw(w, 10, 11, "[bolha]");
-
-    aguardar(w, RES_H - 2);
-    fechar_resultado(w);
+static int pipeline_vazio(const Estado *estado) {
+    return !estado->bi_di.valido && !estado->di_ex.valido &&
+           !estado->ex_mem.valido && !estado->mem_er.valido;
 }
 
-// ─── Tela de estatísticas ─────────────────────────────────────────────────────
-static void tela_estatisticas(Estado *e) {
-    WINDOW *w = abrir_resultado("Estatisticas");
-    mvwprintw(w,  2, 4, "Ciclos       : %d", e->ciclos);
-    mvwprintw(w,  3, 4, "Instrucoes   : %d", e->instrucoes);
-    mvwprintw(w,  5, 4, "  Tipo R     : %d", e->qtd_tipo_r);
-    mvwprintw(w,  6, 4, "  addi       : %d", e->qtd_addi);
-    mvwprintw(w,  7, 4, "  lw         : %d", e->qtd_lw);
-    mvwprintw(w,  8, 4, "  sw         : %d", e->qtd_sw);
-    mvwprintw(w,  9, 4, "  beq        : %d", e->qtd_beq);
-    mvwprintw(w, 10, 4, "  jump       : %d", e->qtd_jump);
-    mvwprintw(w, 12, 4, "Bolhas       : %d", e->bolhas);
-    if (e->instrucoes > 0)
-        mvwprintw(w, 13, 4, "CPI          : %.2f", (float)e->ciclos / e->instrucoes);
-    aguardar(w, RES_H - 2);
-    fechar_resultado(w);
+static int programa_terminou(const Estado *estado) {
+    int pc_fora = estado->PC < 0 ||
+                  estado->PC >= estado->num_instrucoes;
+    return pc_fora && pipeline_vazio(estado);
 }
 
-// ─── Tela de carregar arquivo ─────────────────────────────────────────────────
-static int tela_carregar(Estado *e) {
-    WINDOW *w = abrir_resultado("Carregar .mem");
-    mvwprintw(w, 2, 2, "Arquivo: ");
-    echo();
-    curs_set(1);
-    char nome[100];
-    mvwgetnstr(w, 2, 11, nome, 80);
-    noecho();
-    curs_set(0);
-
-    inicializar_estado(e);
-    int n = leitura_arquivo_mem(e->mem_instrucoes, nome);
-
-    werase(w);
-    box(w, 0, 0);
-    mvwprintw(w, 0, (RES_W - strlen("Carregar .mem")) / 2, " Carregar .mem ");
-    if (n > 0)
-        mvwprintw(w, 2, 2, "OK: %d instrucoes carregadas de '%s'", n, nome);
-    else
-        mvwprintw(w, 2, 2, "Erro ao abrir '%s'", nome);
-
-    aguardar(w, RES_H - 2);
-    fechar_resultado(w);
-    return n;
-}
-
-// ─── Menu principal ───────────────────────────────────────────────────────────
-static void desenhar_menu(WINDOW *w, int highlight, int n) {
-    werase(w);
-    box(w, 0, 0);
-
-    const char *titulo = "Mini MIPS Pipeline";
-    mvwprintw(w, 0, (MENU_W - strlen(titulo)) / 2, " %s ", titulo);
-
-    const char *itens[] = {
+static void desenhar_menu(WINDOW *menu, int selecionada, const Estado *estado) {
+    static const char *opcoes[TOTAL_OPCOES] = {
         "Carregar .mem",
         "Registradores",
         "Assembly",
         "Run",
-        "Step (por estagio)",
+        "Step (1 ciclo)",
         "Estado do pipeline",
         "Estatisticas",
-        "Sair",
+        "Sair"
     };
-    int nitens = 8;
 
-    for (int i = 0; i < nitens; i++) {
-        if (i == highlight) wattron(w, A_REVERSE);
-        mvwprintw(w, 2 + i, 3, "[%d] %s", i + 1 == 8 ? 0 : i + 1, itens[i]);
-        if (i == highlight) wattroff(w, A_REVERSE);
+    werase(menu);
+    box(menu, 0, 0);
+    mvwprintw(menu, 0, 13, " Mini MIPS Pipeline ");
+
+    for (int i = 0; i < TOTAL_OPCOES; i++) {
+        int numero = i == MENU_SAIR ? 0 : i + 1;
+        if (i == selecionada) wattron(menu, A_REVERSE);
+        mvwprintw(menu, 2 + i, 3, "[%d] %-29s", numero, opcoes[i]);
+        if (i == selecionada) wattroff(menu, A_REVERSE);
     }
 
-    if (n > 0) {
-        wattron(w, A_DIM);
-        mvwprintw(w, MENU_H - 2, 2, "%d instrucoes carregadas", n);
-        wattroff(w, A_DIM);
-    }
+    if (estado->num_instrucoes > 0)
+        mvwprintw(menu, 11, 2, "%d instrucoes carregadas | ciclo %d",
+                  estado->num_instrucoes, estado->ciclos);
+    else
+        mvwprintw(menu, 11, 2, "Nenhum programa carregado");
 
-    mvwprintw(w, MENU_H - 1, 0, " setas / enter ");
-    wrefresh(w);
+    wattron(menu, A_DIM);
+    mvwprintw(menu, 12, 2, "Numero/setas: selecionar | ENTER: confirmar");
+    wattroff(menu, A_DIM);
+    wrefresh(menu);
 }
 
-// ─── main ─────────────────────────────────────────────────────────────────────
-int main() {
-    Estado e;
-    inicializar_estado(&e);
-    int n = 0;
-    int estagio_atual = 0;
-
-    initscr();
-    curs_set(0);
-    noecho();
-    cbreak();
-
-    int row = (LINES - MENU_H) / 2;
-    int col = (COLS  - MENU_W) / 2;
-    WINDOW *menu = newwin(MENU_H, MENU_W, row, col);
-    keypad(menu, TRUE);
-
-    int highlight = 0;
-    int nitens = 8;
-    int ch;
+static OpcaoMenu ler_opcao(WINDOW *menu, Estado *estado) {
+    int selecionada = MENU_CARREGAR;
 
     while (1) {
-        desenhar_menu(menu, highlight, n);
-        ch = wgetch(menu);
+        desenhar_menu(menu, selecionada, estado);
+        int tecla = wgetch(menu);
 
-        if (ch == KEY_UP   && highlight > 0)        highlight--;
-        if (ch == KEY_DOWN && highlight < nitens-1)  highlight++;
+        if (tecla == KEY_UP && selecionada > 0)
+            selecionada--;
+        else if (tecla == KEY_DOWN && selecionada < TOTAL_OPCOES - 1)
+            selecionada++;
+        else if (tecla >= '1' && tecla <= '7')
+            selecionada = tecla - '1';
+        else if (tecla == '0')
+            selecionada = MENU_SAIR;
+        else if (eh_enter(tecla))
+            return (OpcaoMenu)selecionada;
+    }
+}
 
-        if (ch == '\n') {
-            switch (highlight) {
-                case 0: // Carregar
-                    n = tela_carregar(&e);
-                    estagio_atual = 0;
-                    break;
-                case 1: // Registradores
-                    tela_registradores(&e);
-                    break;
-                case 2: // Assembly
-                    if (n == 0) {
-                        WINDOW *w = abrir_resultado("Aviso");
-                        mvwprintw(w, 2, 2, "Carregue um arquivo .mem primeiro.");
-                        aguardar(w, RES_H - 2);
-                        fechar_resultado(w);
-                    } else tela_assembly(&e, n);
-                    break;
-                case 3: // Run
-                    if (n == 0) {
-                        WINDOW *w = abrir_resultado("Aviso");
-                        mvwprintw(w, 2, 2, "Carregue um arquivo .mem primeiro.");
-                        aguardar(w, RES_H - 2);
-                        fechar_resultado(w);
-                    } else {
-                        endwin();
-                        
-                        run(&e, n);
-                        
-                        printf("\n[Pressione ENTER para retornar ao menu...]");
-                        getchar();
-                        
-                        refresh();
-                    }
-                    break;
-                case 4: { // Step
-                    if (n == 0) {
-                        WINDOW *w = abrir_resultado("Aviso");
-                        mvwprintw(w, 2, 2, "Carregue um arquivo .mem primeiro.");
-                        aguardar(w, RES_H - 2);
-                        fechar_resultado(w);
-                        break;
-                    }
-                    if (e.PC >= n && !e.bi_di.valido && !e.di_ex.valido &&
-                        !e.ex_mem.valido && !e.mem_er.valido) {
-                        WINDOW *w = abrir_resultado("Step");
-                        mvwprintw(w, 2, 2, "Pipeline vazio.");
-                        aguardar(w, RES_H - 2);
-                        fechar_resultado(w);
-                        break;
-                    }
-                    WINDOW *w = abrir_resultado("Step");
-                    mvwprintw(w, 1, 2, "Estagio: %s  (ciclo %d)",
-                        nome_estagio[estagio_atual], e.ciclos);
-                    switch (estagio_atual) {
-                        case 0: estagio_BI(&e);  break;
-                        case 1: estagio_DI(&e);  break;
-                        case 2: estagio_EX(&e);  break;
-                        case 3: estagio_MEM(&e); break;
-                        case 4: estagio_ER(&e); e.ciclos++; break;
-                    }
-                    // pipeline inline na janela de step
-                    char buf[64];
-                    mvwprintw(w, 3, 2, "BI/DI :");
-                    if (e.bi_di.valido) {
-                        instrucao_para_asm(e.bi_di.instrucao, buf);
-                        mvwprintw(w, 3, 10, "%-22s PC+1=%d", buf, e.bi_di.PC_mais1);
-                    } else mvwprintw(w, 3, 10, "[bolha]");
+static void remover_espacos_externos(char *texto) {
+    char *inicio = texto;
+    while (*inicio == ' ' || *inicio == '\t') inicio++;
+    if (inicio != texto) memmove(texto, inicio, strlen(inicio) + 1);
 
-                    mvwprintw(w, 5, 2, "DI/EX :");
-                    if (e.di_ex.valido) {
-                        instrucao_para_asm(e.di_ex.instrucao_raw, buf);
-                        mvwprintw(w, 5, 10, "%-22s", buf);
-                        mvwprintw(w, 6, 10, "A=%d B=%d", e.di_ex.A, e.di_ex.B);
-                    } else mvwprintw(w, 5, 10, "[bolha]");
+    size_t tamanho = strlen(texto);
+    while (tamanho > 0 &&
+           (texto[tamanho - 1] == ' ' || texto[tamanho - 1] == '\t'))
+        texto[--tamanho] = '\0';
+}
 
-                    mvwprintw(w, 8, 2, "EX/MEM:");
-                    if (e.ex_mem.valido)
-                        mvwprintw(w, 8, 10, "ULAout=%d zero=%d rd=$%d",
-                            e.ex_mem.ULAout, e.ex_mem.zero, e.ex_mem.rd_dest);
-                    else mvwprintw(w, 8, 10, "[bolha]");
+static void tela_carregar(Estado *estado) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Carregar .mem");
+    char nome[256];
+    if (!janela) return;
 
-                    mvwprintw(w, 10, 2, "MEM/ER:");
-                    if (e.mem_er.valido)
-                        mvwprintw(w, 10, 10, "resultado=%d rd=$%d",
-                            e.mem_er.resultado, e.mem_er.rd_dest);
-                    else mvwprintw(w, 10, 10, "[bolha]");
+    while (1) {
+        werase(janela);
+        box(janela, 0, 0);
+        mvwprintw(janela, 0, 22, " Carregar .mem ");
+        mvwprintw(janela, 2, 3, "Digite o nome do arquivo. Exemplo: prog.mem");
+        mvwprintw(janela, 4, 3, "Arquivo: ");
+        wmove(janela, 4, 12);
+        wrefresh(janela);
 
-                    estagio_atual = (estagio_atual + 1) % 5;
-                    if (estagio_atual == 0)
-                        mvwprintw(w, 12, 2, ">>> Ciclo %d completo", e.ciclos);
+        echo();
+        curs_set(1);
+        int resultado = wgetnstr(janela, nome, (int)sizeof(nome) - 1);
+        curs_set(0);
+        noecho();
 
-                    aguardar(w, RES_H - 2);
-                    fechar_resultado(w);
-                    break;
-                }
-                case 5: // Pipeline
-                    tela_pipeline(&e);
-                    break;
-                case 6: // Estatisticas
-                    tela_estatisticas(&e);
-                    break;
-                case 7: // Sair
-                    endwin();
-                    return 0;
-            }
+        if (resultado == ERR) {
+            fechar_janela(janela);
+            return;
+        }
+
+        remover_espacos_externos(nome);
+        if (nome[0] != '\0') break;
+
+        mvwprintw(janela, 6, 3, "O nome nao pode ficar vazio.");
+        mvwprintw(janela, 8, 3, "Digite o nome e pressione ENTER.");
+        wrefresh(janela);
+    }
+
+    Estado novo_estado;
+    inicializar_estado(&novo_estado);
+    int quantidade = leitura_arquivo_mem(novo_estado.mem_instrucoes, nome);
+
+    werase(janela);
+    box(janela, 0, 0);
+    mvwprintw(janela, 0, 22, " Carregar .mem ");
+
+    if (quantidade > 0) {
+        novo_estado.num_instrucoes = quantidade;
+        *estado = novo_estado;
+        mvwprintw(janela, 3, 3, "Arquivo carregado com sucesso.");
+        mvwprintw(janela, 5, 3, "Instrucoes: %d", quantidade);
+        mvwprintw(janela, 7, 3, "Arquivo: %.45s", nome);
+    } else {
+        mvwprintw(janela, 3, 3, "Nao foi possivel carregar o arquivo.");
+        mvwprintw(janela, 5, 3, "Use prog.mem se ele estiver nesta pasta.");
+        mvwprintw(janela, 7, 3, "Informado: %.43s", nome);
+    }
+
+    aguardar(janela);
+    fechar_janela(janela);
+}
+
+static void tela_registradores(const Estado *estado) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Registradores");
+    if (!janela) return;
+
+    for (int i = 0; i < 8; i++)
+        mvwprintw(janela, 2 + i, 4, "$%d = %d", i,
+                  estado->registradores[i]);
+    mvwprintw(janela, 11, 4, "PC = %d", estado->PC);
+    aguardar(janela);
+    fechar_janela(janela);
+}
+
+static void tela_assembly(const Estado *estado) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Assembly");
+    int deslocamento = 0;
+    int maximo = RES_H - 4;
+    if (!janela) return;
+
+    while (1) {
+        werase(janela);
+        box(janela, 0, 0);
+        mvwprintw(janela, 0, 24, " Assembly ");
+
+        for (int i = 0; i < maximo && i + deslocamento <
+             estado->num_instrucoes; i++) {
+            char texto[64];
+            instrucao_para_asm(estado->mem_instrucoes[i + deslocamento],
+                               texto);
+            mvwprintw(janela, 2 + i, 4, "[%2d] %s",
+                      i + deslocamento, texto);
+        }
+
+        wattron(janela, A_DIM);
+        mvwprintw(janela, RES_H - 2, 2,
+                  "Setas: rolar | ENTER ou Q: voltar");
+        wattroff(janela, A_DIM);
+        wrefresh(janela);
+
+        int tecla = wgetch(janela);
+        if (eh_enter(tecla) || tecla == 'q' || tecla == 'Q') break;
+        if (tecla == KEY_DOWN &&
+            deslocamento + maximo < estado->num_instrucoes)
+            deslocamento++;
+        else if (tecla == KEY_UP && deslocamento > 0)
+            deslocamento--;
+    }
+
+    fechar_janela(janela);
+}
+
+static void imprimir_pipeline_janela(WINDOW *janela, const Estado *estado) {
+    char texto[64];
+    mvwprintw(janela, 1, 2, "Ciclo: %d | PC: %d", estado->ciclos,
+              estado->PC);
+
+    mvwprintw(janela, 3, 2, "BI/DI  :");
+    if (estado->bi_di.valido) {
+        instrucao_para_asm(estado->bi_di.instrucao, texto);
+        mvwprintw(janela, 3, 11, "%-20s PC+1=%d", texto,
+                  estado->bi_di.PC_mais1);
+    } else {
+        mvwprintw(janela, 3, 11, "[bolha]");
+    }
+
+    mvwprintw(janela, 5, 2, "DI/EX  :");
+    if (estado->di_ex.valido) {
+        instrucao_para_asm(estado->di_ex.instrucao_raw, texto);
+        mvwprintw(janela, 5, 11, "%s", texto);
+        mvwprintw(janela, 6, 11, "A=%d B=%d imm=%d",
+                  estado->di_ex.A, estado->di_ex.B,
+                  estado->di_ex.c.imm);
+    } else {
+        mvwprintw(janela, 5, 11, "[bolha]");
+    }
+
+    mvwprintw(janela, 8, 2, "EX/MEM :");
+    if (estado->ex_mem.valido)
+        mvwprintw(janela, 8, 11, "ULA=%d zero=%d destino=$%d",
+                  estado->ex_mem.ULAout, estado->ex_mem.zero,
+                  estado->ex_mem.rd_dest);
+    else
+        mvwprintw(janela, 8, 11, "[bolha]");
+
+    mvwprintw(janela, 10, 2, "MEM/ER :");
+    if (estado->mem_er.valido)
+        mvwprintw(janela, 10, 11, "resultado=%d destino=$%d",
+                  estado->mem_er.resultado, estado->mem_er.rd_dest);
+    else
+        mvwprintw(janela, 10, 11, "[bolha]");
+}
+
+static void tela_pipeline(const Estado *estado, const char *titulo) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, titulo);
+    if (!janela) return;
+    imprimir_pipeline_janela(janela, estado);
+    aguardar(janela);
+    fechar_janela(janela);
+}
+
+static void tela_step(Estado *estado) {
+    if (programa_terminou(estado)) {
+        mostrar_aviso("Step", "O programa terminou e o pipeline esta vazio.");
+        return;
+    }
+
+    ciclo_pipeline(estado);
+    tela_pipeline(estado, "Step - ciclo concluido");
+}
+
+static void tela_run(Estado *estado) {
+    if (programa_terminou(estado)) {
+        mostrar_aviso("Run", "O programa ja foi executado ate o fim.");
+        return;
+    }
+
+    run(estado, estado->num_instrucoes);
+
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Execucao concluida");
+    if (!janela) return;
+    mvwprintw(janela, 2, 3, "Ciclos: %d", estado->ciclos);
+    mvwprintw(janela, 3, 3, "Instrucoes concluidas: %d",
+              estado->instrucoes);
+    for (int i = 0; i < 8; i++)
+        mvwprintw(janela, 5 + i, 5, "$%d = %d", i,
+                  estado->registradores[i]);
+    mvwprintw(janela, 14, 3, "PC = %d", estado->PC);
+    aguardar(janela);
+    fechar_janela(janela);
+}
+
+static void tela_estatisticas(const Estado *estado) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Estatisticas");
+    if (!janela) return;
+
+    mvwprintw(janela, 2, 4, "Ciclos       : %d", estado->ciclos);
+    mvwprintw(janela, 3, 4, "Instrucoes   : %d", estado->instrucoes);
+    mvwprintw(janela, 5, 4, "Tipo R       : %d", estado->qtd_tipo_r);
+    mvwprintw(janela, 6, 4, "addi         : %d", estado->qtd_addi);
+    mvwprintw(janela, 7, 4, "lw           : %d", estado->qtd_lw);
+    mvwprintw(janela, 8, 4, "sw           : %d", estado->qtd_sw);
+    mvwprintw(janela, 9, 4, "beq          : %d", estado->qtd_beq);
+    mvwprintw(janela, 10, 4, "jump         : %d", estado->qtd_jump);
+    mvwprintw(janela, 12, 4, "Bolhas       : %d", estado->bolhas);
+    if (estado->instrucoes > 0)
+        mvwprintw(janela, 13, 4, "CPI          : %.2f",
+                  (float)estado->ciclos / estado->instrucoes);
+    aguardar(janela);
+    fechar_janela(janela);
+}
+
+int main(void) {
+    Estado estado;
+    inicializar_estado(&estado);
+
+    initscr();
+    cbreak();
+    noecho();
+    curs_set(0);
+
+    if (LINES < RES_H || COLS < RES_W) {
+        endwin();
+        fprintf(stderr, "O terminal precisa ter pelo menos %dx%d.\n",
+                RES_W, RES_H);
+        return 1;
+    }
+
+    WINDOW *menu = criar_janela(MENU_H, MENU_W, "Mini MIPS Pipeline");
+    if (!menu) {
+        endwin();
+        fprintf(stderr, "Nao foi possivel criar o menu.\n");
+        return 1;
+    }
+
+    while (1) {
+        OpcaoMenu opcao = ler_opcao(menu, &estado);
+
+        if (opcao == MENU_SAIR) break;
+
+        if (opcao == MENU_CARREGAR) {
+            tela_carregar(&estado);
+            continue;
+        }
+
+        if (estado.num_instrucoes == 0) {
+            mostrar_aviso("Aviso", "Carregue prog.mem antes de continuar.");
+            continue;
+        }
+
+        switch (opcao) {
+            case MENU_REGISTRADORES:
+                tela_registradores(&estado);
+                break;
+            case MENU_ASSEMBLY:
+                tela_assembly(&estado);
+                break;
+            case MENU_RUN:
+                tela_run(&estado);
+                break;
+            case MENU_STEP:
+                tela_step(&estado);
+                break;
+            case MENU_PIPELINE:
+                tela_pipeline(&estado, "Estado do pipeline");
+                break;
+            case MENU_ESTATISTICAS:
+                tela_estatisticas(&estado);
+                break;
+            case MENU_CARREGAR:
+            case MENU_SAIR:
+                break;
         }
     }
+
+    delwin(menu);
     endwin();
     return 0;
 }
