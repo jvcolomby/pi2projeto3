@@ -3,6 +3,11 @@
 #include <string.h>
 #include "simulador.h"
 
+#define MAX_HISTORICO 1000
+
+static Estado historico[MAX_HISTORICO];
+static int topo_historico = 0;
+
 Decode campos(int instrucao) {
     Decode c;
     c.opcode = (instrucao >> 12) & 0xF;
@@ -126,6 +131,33 @@ void inicializar_estado(Estado *e) {
     e->di_ex.valido  = 0;
     e->ex_mem.valido = 0;
     e->mem_er.valido = 0;
+    limpar_historico_pipeline();
+}
+
+static void salvar_estado_pipeline(const Estado *e) {
+    if (topo_historico >= MAX_HISTORICO) {
+        memmove(historico, historico + 1,
+                (MAX_HISTORICO - 1) * sizeof(historico[0]));
+        topo_historico = MAX_HISTORICO - 1;
+    }
+
+    historico[topo_historico++] = *e;
+}
+
+int stepback_pipeline(Estado *e) {
+    if (topo_historico == 0)
+        return 0;
+
+    *e = historico[--topo_historico];
+    return 1;
+}
+
+int historico_pipeline_tamanho(void) {
+    return topo_historico;
+}
+
+void limpar_historico_pipeline(void) {
+    topo_historico = 0;
 }
 
 void estagio_BI(Estado *e) {
@@ -173,13 +205,14 @@ void estagio_EX(Estado *e) {
         ? 0
         : ULA(A, op2, e->di_ex.controle_ex.ula_op, &flag);
 
-    e->ex_mem.ULAout    = result;
-    e->ex_mem.B         = B;
-    e->ex_mem.zero      = flag;
-    e->ex_mem.opcode    = c.opcode;
-    e->ex_mem.addr      = c.addr;
-    e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm;
-    e->ex_mem.rd_dest   = e->di_ex.controle_ex.reg_dst ? c.rd : c.rt;
+    e->ex_mem.instrucao_raw = e->di_ex.instrucao_raw;
+    e->ex_mem.ULAout        = result;
+    e->ex_mem.B             = B;
+    e->ex_mem.zero          = flag;
+    e->ex_mem.opcode        = c.opcode;
+    e->ex_mem.addr          = c.addr;
+    e->ex_mem.PC_branch     = e->di_ex.PC_mais1 + c.imm;
+    e->ex_mem.rd_dest       = e->di_ex.controle_ex.reg_dst ? c.rd : c.rt;
     e->ex_mem.controle_mem = e->di_ex.controle_mem;
     e->ex_mem.controle_er  = e->di_ex.controle_er;
     e->ex_mem.valido    = 1;
@@ -212,9 +245,10 @@ void estagio_MEM(Estado *e) {
             e->bolhas += 2;
     }
 
-    e->mem_er.resultado = resultado;
-    e->mem_er.rd_dest   = e->ex_mem.rd_dest;
-    e->mem_er.opcode    = opcode;
+    e->mem_er.instrucao_raw = e->ex_mem.instrucao_raw;
+    e->mem_er.resultado     = resultado;
+    e->mem_er.rd_dest       = e->ex_mem.rd_dest;
+    e->mem_er.opcode        = opcode;
     e->mem_er.controle_er = e->ex_mem.controle_er;
     e->mem_er.valido    = 1;
 }
@@ -246,6 +280,7 @@ void estagio_ER(Estado *e) {
 }
 
 void ciclo_pipeline(Estado *e) {
+    salvar_estado_pipeline(e);
     estagio_ER(e);
     estagio_MEM(e);
     estagio_EX(e);
@@ -305,19 +340,20 @@ void imprimir_pipeline(Estado *e) {
 
     printf("  EX/MEM : ");
     if (e->ex_mem.valido) {
+        instrucao_para_asm(e->ex_mem.instrucao_raw, buf);
         int op = e->ex_mem.opcode;
         if (op == OP_TIPO_R)
-            printf("tipo R    |  ULAout=%d  rd=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+            printf("%s  |  ULAout=%d  rd=$%d\n", buf, e->ex_mem.ULAout, e->ex_mem.rd_dest);
         else if (op == OP_ADDI)
-            printf("addi      |  ULAout=%d  rt=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+            printf("%s  |  ULAout=%d  rt=$%d\n", buf, e->ex_mem.ULAout, e->ex_mem.rd_dest);
         else if (op == OP_LW)
-            printf("lw        |  end=%d  rt=$%d\n", e->ex_mem.ULAout, e->ex_mem.rd_dest);
+            printf("%s  |  end=%d  rt=$%d\n", buf, e->ex_mem.ULAout, e->ex_mem.rd_dest);
         else if (op == OP_SW)
-            printf("sw        |  end=%d  dado=%d\n", e->ex_mem.ULAout, e->ex_mem.B);
+            printf("%s  |  end=%d  dado=%d\n", buf, e->ex_mem.ULAout, e->ex_mem.B);
         else if (op == OP_BEQ)
-            printf("beq       |  zero=%d  PC_branch=%d\n", e->ex_mem.zero, e->ex_mem.PC_branch);
+            printf("%s  |  zero=%d  PC_branch=%d\n", buf, e->ex_mem.zero, e->ex_mem.PC_branch);
         else if (op == OP_JUMP)
-            printf("jump      |  addr=%d\n", e->ex_mem.addr);
+            printf("%s  |  addr=%d\n", buf, e->ex_mem.addr);
         else
             printf("op=%d  |  ULAout=%d\n", op, e->ex_mem.ULAout);
     } else {
@@ -326,14 +362,13 @@ void imprimir_pipeline(Estado *e) {
 
     printf("  MEM/ER : ");
     if (e->mem_er.valido) {
+        instrucao_para_asm(e->mem_er.instrucao_raw, buf);
         int op = e->mem_er.opcode;
         if (op == OP_SW || op == OP_BEQ || op == OP_JUMP)
-            printf("%-6s    |  (sem writeback)\n",
-                op == OP_SW ? "sw" : op == OP_BEQ ? "beq" : "jump");
+            printf("%s  |  (sem writeback)\n", buf);
         else
-            printf("%-6s    |  resultado=%d  rd=$%d\n",
-                op == OP_TIPO_R ? "tipo R" : op == OP_ADDI ? "addi" : "lw",
-                e->mem_er.resultado, e->mem_er.rd_dest);
+            printf("%s  |  resultado=%d  rd=$%d\n", buf,
+                   e->mem_er.resultado, e->mem_er.rd_dest);
     } else {
         printf("[bolha]\n");
     }
