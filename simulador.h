@@ -22,6 +22,23 @@ typedef struct {
 } Decode;
 
 typedef struct {
+    int reg_dst;
+    int ula_op;
+    int ula_fonte;
+} Controle_EX;
+
+typedef struct {
+    int dvc;
+    int dvi;
+    int esc_mem;
+} Controle_MEM;
+
+typedef struct {
+    int esc_reg;
+    int mem_para_reg;
+} Controle_ER;
+
+typedef struct {
     int instrucao;
     int PC_mais1;
     int valido;
@@ -33,6 +50,9 @@ typedef struct {
     int A;
     int B;
     int PC_mais1;
+    Controle_EX controle_ex;
+    Controle_MEM controle_mem;
+    Controle_ER controle_er;
     int valido;
 } Reg_DI_EX;
 
@@ -44,6 +64,8 @@ typedef struct {
     int opcode;
     int addr;
     int PC_branch;
+    Controle_MEM controle_mem;
+    Controle_ER controle_er;
     int valido;
 } Reg_EX_MEM;
 
@@ -51,6 +73,7 @@ typedef struct {
     int resultado;
     int rd_dest;
     int opcode;
+    Controle_ER controle_er;
     int valido;
 } Reg_MEM_ER;
 
@@ -59,6 +82,7 @@ typedef struct {
     int mem_dados[256];
     int registradores[8];
     int PC;
+    int num_instrucoes;
     Reg_BI_DI  bi_di;
     Reg_DI_EX  di_ex;
     Reg_EX_MEM ex_mem;
