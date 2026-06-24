@@ -16,6 +16,33 @@ Decode campos(int instrucao) {
     return c;
 }
 
+static int opcode_valido(int opcode, int funct) {
+    if (opcode == OP_TIPO_R)
+        return funct == FUNCT_ADD || funct == FUNCT_SUB ||
+               funct == FUNCT_AND || funct == FUNCT_OR;
+
+    return opcode == OP_ADDI || opcode == OP_LW || opcode == OP_SW ||
+           opcode == OP_BEQ || opcode == OP_JUMP;
+}
+
+static void gerar_controle(Decode c, Controle_EX *ex, Controle_MEM *mem,
+                           Controle_ER *er) {
+    memset(ex, 0, sizeof(*ex));
+    memset(mem, 0, sizeof(*mem));
+    memset(er, 0, sizeof(*er));
+
+    ex->reg_dst = c.opcode == OP_TIPO_R;
+    ex->ula_op = controle_ULA(c.opcode, c.funct);
+    ex->ula_fonte = c.opcode == OP_ADDI || c.opcode == OP_LW ||
+                    c.opcode == OP_SW;
+    mem->dvc = c.opcode == OP_BEQ;
+    mem->dvi = c.opcode == OP_JUMP;
+    mem->esc_mem = c.opcode == OP_SW;
+    er->esc_reg = c.opcode == OP_TIPO_R || c.opcode == OP_ADDI ||
+                  c.opcode == OP_LW;
+    er->mem_para_reg = c.opcode != OP_LW;
+}
+
 int controle_ULA(int opcode, int funct) {
     switch (opcode) {
         case OP_TIPO_R:
@@ -43,15 +70,15 @@ int ULA(int A, int B, int controle, int *flag_zero) {
         case 5: resultado = A | B; break;
         default: resultado = 0;
     }
+    resultado &= 0xFF;
+    if (resultado >= 128)
+        resultado -= 256;
     *flag_zero = (resultado == 0);
-    if (resultado > 127 || resultado < -128)
-        printf("[ULA] Overflow detectado.\n");
     return resultado;
 }
 
 void instrucao_para_asm(int instrucao, char *buf) {
     Decode c = campos(instrucao);
-    if (instrucao == 0) { sprintf(buf, "nop"); return; }
     switch (c.opcode) {
         case OP_TIPO_R:
             switch (c.funct) {
@@ -72,7 +99,8 @@ void instrucao_para_asm(int instrucao, char *buf) {
 
 int leitura_arquivo_mem(int mem_instrucoes[], char nome_arquivo[]) {
     FILE *arquivo = fopen(nome_arquivo, "r");
-    if (!arquivo) { printf("Erro ao abrir %s\n", nome_arquivo); return 0; }
+    if (!arquivo) return 0;
+
     char linha[200];
     int i = 0;
     while (fgets(linha, sizeof(linha), arquivo) && i < 256) {
@@ -81,6 +109,11 @@ int leitura_arquivo_mem(int mem_instrucoes[], char nome_arquivo[]) {
         linha[strcspn(linha, "\r\n")] = '\0';
         char *tok = strtok(linha, " \t");
         if (!tok || tok[0] == '\0') continue;
+
+        size_t tamanho = strlen(tok);
+        if (tamanho != 16 || strspn(tok, "01") != tamanho)
+            continue;
+
         mem_instrucoes[i++] = (int)strtol(tok, NULL, 2);
     }
     fclose(arquivo);
@@ -96,7 +129,7 @@ void inicializar_estado(Estado *e) {
 }
 
 void estagio_BI(Estado *e) {
-    if (e->PC >= 256) {
+    if (e->PC < 0 || e->PC >= e->num_instrucoes) {
         e->bi_di.valido = 0;
         return;
     }
@@ -112,11 +145,17 @@ void estagio_DI(Estado *e) {
         return;
     }
     Decode c = campos(e->bi_di.instrucao);
+    if (!opcode_valido(c.opcode, c.funct)) {
+        e->di_ex.valido = 0;
+        return;
+    }
     e->di_ex.c             = c;
     e->di_ex.instrucao_raw = e->bi_di.instrucao;
     e->di_ex.A             = e->registradores[c.rs];
     e->di_ex.B             = e->registradores[c.rt];
     e->di_ex.PC_mais1      = e->bi_di.PC_mais1;
+    gerar_controle(c, &e->di_ex.controle_ex, &e->di_ex.controle_mem,
+                   &e->di_ex.controle_er);
     e->di_ex.valido        = 1;
 }
 
@@ -129,9 +168,10 @@ void estagio_EX(Estado *e) {
     int A      = e->di_ex.A;
     int B      = e->di_ex.B;
     int flag   = 0;
-    int ctrl   = controle_ULA(c.opcode, c.funct);
-    int op2    = (c.opcode == OP_TIPO_R || c.opcode == OP_BEQ) ? B : c.imm;
-    int result = ULA(A, op2, ctrl, &flag);
+    int op2    = e->di_ex.controle_ex.ula_fonte ? c.imm : B;
+    int result = c.opcode == OP_JUMP
+        ? 0
+        : ULA(A, op2, e->di_ex.controle_ex.ula_op, &flag);
 
     e->ex_mem.ULAout    = result;
     e->ex_mem.B         = B;
@@ -139,7 +179,9 @@ void estagio_EX(Estado *e) {
     e->ex_mem.opcode    = c.opcode;
     e->ex_mem.addr      = c.addr;
     e->ex_mem.PC_branch = e->di_ex.PC_mais1 + c.imm;
-    e->ex_mem.rd_dest   = (c.opcode == OP_TIPO_R) ? c.rd : c.rt;
+    e->ex_mem.rd_dest   = e->di_ex.controle_ex.reg_dst ? c.rd : c.rt;
+    e->ex_mem.controle_mem = e->di_ex.controle_mem;
+    e->ex_mem.controle_er  = e->di_ex.controle_er;
     e->ex_mem.valido    = 1;
 }
 
@@ -149,41 +191,31 @@ void estagio_MEM(Estado *e) {
         return;
     }
     int opcode    = e->ex_mem.opcode;
-    int endereco  = e->ex_mem.ULAout;
+    int endereco  = e->ex_mem.ULAout & 0xFF;
     int resultado = e->ex_mem.ULAout;
 
-    switch (opcode) {
-        case OP_LW:
-            if (endereco >= 0 && endereco < 256)
-                resultado = e->mem_dados[endereco];
-            else
-                printf("[MEM] Erro: endereço LW fora dos limites (%d)\n", endereco);
-            break;
-        case OP_SW:
-            if (endereco >= 0 && endereco < 256)
-                e->mem_dados[endereco] = e->ex_mem.B;
-            else
-                printf("[MEM] Erro: endereço SW fora dos limites (%d)\n", endereco);
-            break;
-        case OP_BEQ:
-            if (e->ex_mem.zero) {
-                e->PC = e->ex_mem.PC_branch;
-                e->bi_di.valido = 0;
-                e->di_ex.valido = 0;
-                e->bolhas += 2;
-            }
-            break;
-        case OP_JUMP:
+    if (!e->ex_mem.controle_er.mem_para_reg)
+        resultado = e->mem_dados[endereco];
+
+    if (e->ex_mem.controle_mem.esc_mem)
+        e->mem_dados[endereco] = e->ex_mem.B;
+
+    if (e->ex_mem.controle_mem.dvc && e->ex_mem.zero) {
+        e->PC = e->ex_mem.PC_branch;
+        e->bi_di.valido = 0;
+        e->di_ex.valido = 0;
+        e->bolhas += 2;
+    } else if (e->ex_mem.controle_mem.dvi) {
             e->PC = e->ex_mem.addr;
             e->bi_di.valido = 0;
             e->di_ex.valido = 0;
             e->bolhas += 2;
-            break;
     }
 
     e->mem_er.resultado = resultado;
     e->mem_er.rd_dest   = e->ex_mem.rd_dest;
     e->mem_er.opcode    = opcode;
+    e->mem_er.controle_er = e->ex_mem.controle_er;
     e->mem_er.valido    = 1;
 }
 
@@ -202,7 +234,7 @@ void estagio_ER(Estado *e) {
         case OP_JUMP:   e->qtd_jump++;   break;
     }
 
-    if (opcode == OP_SW || opcode == OP_BEQ || opcode == OP_JUMP) {
+    if (!e->mem_er.controle_er.esc_reg) {
         e->mem_er.valido = 0;
         return;
     }
@@ -223,20 +255,15 @@ void ciclo_pipeline(Estado *e) {
 }
 
 void run(Estado *e, int num_instrucoes) {
-    while (e->PC < num_instrucoes ||
+    e->num_instrucoes = num_instrucoes;
+    while ((e->PC >= 0 && e->PC < num_instrucoes) ||
         e->bi_di.valido        ||
         e->di_ex.valido        ||
         e->ex_mem.valido       ||
         e->mem_er.valido) {
         
         ciclo_pipeline(e);
-
-        printf("\n==================================================");
-        imprimir_pipeline(e);
-        imprimir_registradores(e);
     }
-    
-    printf("\n--- Execucao concluida ---\n");
 }
 
 void imprimir_registradores(Estado *e) {
