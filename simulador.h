@@ -57,6 +57,7 @@ typedef struct {
 } Reg_DI_EX;
 
 typedef struct {
+    int instrucao_raw;
     int ULAout;
     int B;
     int zero;
@@ -70,6 +71,7 @@ typedef struct {
 } Reg_EX_MEM;
 
 typedef struct {
+    int instrucao_raw;
     int resultado;
     int rd_dest;
     int opcode;
@@ -113,6 +115,9 @@ void    estagio_ER (Estado *e);
 
 void    ciclo_pipeline(Estado *e);
 void    run(Estado *e, int num_instrucoes);
+int     stepback_pipeline(Estado *e);
+int     historico_pipeline_tamanho(void);
+void    limpar_historico_pipeline(void);
 
 void    imprimir_registradores(Estado *e);
 void    imprimir_pipeline(Estado *e);
