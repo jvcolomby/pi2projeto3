@@ -279,13 +279,92 @@ void estagio_ER(Estado *e) {
     e->mem_er.valido = 0;
 }
 
+/* ----------  detecção de hazard load-use  ---------- */
+static int detectar_stall_load(const Estado *e) {
+    /* LW no estágio DI/EX cujo destino (rt) é lido pela instrução em BI/DI */
+    if (!e->di_ex.valido || e->di_ex.c.opcode != OP_LW)
+        return 0;
+
+    int lw_rt = e->di_ex.c.rt;          /* registrador destino do LW */
+    if (lw_rt == 0) return 0;           /* $0 nunca causa hazard      */
+    if (!e->bi_di.valido) return 0;
+
+    Decode prox = campos(e->bi_di.instrucao);
+
+    /* quais registradores a próxima instrução lê? */
+    int le_rs = (prox.opcode != OP_JUMP);
+    int le_rt = (prox.opcode == OP_TIPO_R || prox.opcode == OP_BEQ ||
+                 prox.opcode == OP_SW);
+
+    return (le_rs && prox.rs == lw_rt) || (le_rt && prox.rt == lw_rt);
+}
+
+/* ----------  forwarding  ---------- */
+static void aplicar_forwarding(Estado *e,
+                               int fwd_exmem_ok, int fwd_exmem_rd, int fwd_exmem_val,
+                               int fwd_memer_ok, int fwd_memer_rd, int fwd_memer_val) {
+    if (!e->di_ex.valido) return;
+
+    int rs = e->di_ex.c.rs;
+    int rt = e->di_ex.c.rt;
+
+    /* ---- Forwarding para A (valor de rs) ---- */
+    /* EX/MEM tem prioridade (instrução mais recente) */
+    if (fwd_exmem_ok && fwd_exmem_rd == rs)
+        e->di_ex.A = fwd_exmem_val;
+    else if (fwd_memer_ok && fwd_memer_rd == rs)
+        e->di_ex.A = fwd_memer_val;
+
+    /* ---- Forwarding para B (valor de rt) ---- */
+    if (fwd_exmem_ok && fwd_exmem_rd == rt)
+        e->di_ex.B = fwd_exmem_val;
+    else if (fwd_memer_ok && fwd_memer_rd == rt)
+        e->di_ex.B = fwd_memer_val;
+}
+
 void ciclo_pipeline(Estado *e) {
     salvar_estado_pipeline(e);
+
+    /* ---- 1. detectar stall load-use ANTES de avançar estágios ---- */
+    int stall = detectar_stall_load(e);
+
+    /* ---- 2. salvar fontes de forwarding (estado pré-ciclo) ---- */
+    /* EX/MEM: forward ULAout, mas NÃO para LW (dado ainda não lido) */
+    int fwd_exmem_ok  = e->ex_mem.valido &&
+                        e->ex_mem.controle_er.esc_reg &&
+                        e->ex_mem.rd_dest != 0 &&
+                        e->ex_mem.opcode != OP_LW;
+    int fwd_exmem_rd  = e->ex_mem.rd_dest;
+    int fwd_exmem_val = e->ex_mem.ULAout;
+
+    /* MEM/ER: forward resultado (já inclui dado da memória p/ LW) */
+    int fwd_memer_ok  = e->mem_er.valido &&
+                        e->mem_er.controle_er.esc_reg &&
+                        e->mem_er.rd_dest != 0;
+    int fwd_memer_rd  = e->mem_er.rd_dest;
+    int fwd_memer_val = e->mem_er.resultado;
+
+    /* ---- 3. executar estágios de trás para frente ---- */
     estagio_ER(e);
     estagio_MEM(e);
+
+    /* aplicar forwarding nos operandos de DI/EX antes de EX consumir */
+    aplicar_forwarding(e,
+                       fwd_exmem_ok, fwd_exmem_rd, fwd_exmem_val,
+                       fwd_memer_ok, fwd_memer_rd, fwd_memer_val);
+
     estagio_EX(e);
-    estagio_DI(e);
-    estagio_BI(e);
+
+    if (stall) {
+        /* bolha: DI/EX vira NOP, BI/DI e PC ficam congelados */
+        e->di_ex.valido = 0;
+        e->bolhas++;
+        /* NÃO executa estagio_DI nem estagio_BI → PC não avança */
+    } else {
+        estagio_DI(e);
+        estagio_BI(e);
+    }
+
     e->ciclos++;
 }
 
