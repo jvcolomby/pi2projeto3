@@ -45,7 +45,7 @@ static void gerar_controle(Decode c, Controle_EX *ex, Controle_MEM *mem,
     mem->esc_mem = c.opcode == OP_SW;
     er->esc_reg = c.opcode == OP_TIPO_R || c.opcode == OP_ADDI ||
                   c.opcode == OP_LW;
-    er->mem_para_reg = c.opcode != OP_LW;
+    er->mem_para_reg = c.opcode == OP_LW;
 }
 
 int controle_ULA(int opcode, int funct) {
@@ -227,7 +227,7 @@ void estagio_MEM(Estado *e) {
     int endereco  = e->ex_mem.ULAout & 0xFF;
     int resultado = e->ex_mem.ULAout;
 
-    if (!e->ex_mem.controle_er.mem_para_reg)
+    if (e->ex_mem.controle_er.mem_para_reg)
         resultado = e->mem_dados[endereco];
 
     if (e->ex_mem.controle_mem.esc_mem)
@@ -355,11 +355,13 @@ void ciclo_pipeline(Estado *e) {
 
     estagio_EX(e);
 
-    if (stall) {
-        /* bolha: DI/EX vira NOP, BI/DI e PC ficam congelados */
+    if (stall && e->di_ex.valido) {
+        /* bolha: DI/EX vira NOP, BI/DI e PC ficam congelados            */
+        /* Checa di_ex.valido DEPOIS de MEM: se um branch tomado já      */
+        /* fez flush (invalidou di_ex), o stall não deve ser aplicado —  */
+        /* senão impediria BI de buscar do endereço-alvo do branch.      */
         e->di_ex.valido = 0;
         e->bolhas++;
-        /* NÃO executa estagio_DI nem estagio_BI → PC não avança */
     } else {
         estagio_DI(e);
         estagio_BI(e);
