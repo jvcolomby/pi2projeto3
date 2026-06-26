@@ -5,10 +5,10 @@
 #include "simulador.h"
 
 #define MENU_W 48
-#define MENU_H 15
+#define MENU_H 16
 #define RES_W 60
 #define RES_H 24
-#define TOTAL_OPCOES 8
+#define TOTAL_OPCOES 9
 
 #define COR_BORDA 1
 #define COR_TITULO 2
@@ -26,6 +26,7 @@ typedef enum {
     MENU_STEP,
     MENU_PIPELINE,
     MENU_ESTATISTICAS,
+    MENU_MEMORIA,
     MENU_SAIR
 } OpcaoMenu;
 
@@ -136,6 +137,7 @@ static void desenhar_menu(WINDOW *menu, int selecionada, const Estado *estado) {
         "Step / Stepback",
         "Estado do pipeline",
         "Estatisticas",
+        "Memoria de dados",
         "Sair"
     };
 
@@ -157,14 +159,14 @@ static void desenhar_menu(WINDOW *menu, int selecionada, const Estado *estado) {
 
     wattron(menu, cor(COR_INFO) | A_BOLD);
     if (estado->num_instrucoes > 0)
-        mvwprintw(menu, 11, 2, "%d instrucoes carregadas | ciclo %d",
+        mvwprintw(menu, 12, 2, "%d instrucoes carregadas | ciclo %d",
                   estado->num_instrucoes, estado->ciclos);
     else
-        mvwprintw(menu, 11, 2, "Nenhum programa carregado");
+        mvwprintw(menu, 12, 2, "Nenhum programa carregado");
     wattroff(menu, cor(COR_INFO) | A_BOLD);
 
     wattron(menu, cor(COR_ALERTA) | A_DIM);
-    mvwprintw(menu, 13, 2, "Numero/setas: selecionar | ENTER: confirmar");
+    mvwprintw(menu, 14, 2, "Numero/setas: selecionar | ENTER: confirmar");
     wattroff(menu, cor(COR_ALERTA) | A_DIM);
     wrefresh(menu);
 }
@@ -180,7 +182,7 @@ static OpcaoMenu ler_opcao(WINDOW *menu, Estado *estado) {
             selecionada--;
         else if (tecla == KEY_DOWN && selecionada < TOTAL_OPCOES - 1)
             selecionada++;
-        else if (tecla >= '1' && tecla <= '7')
+        else if (tecla >= '1' && tecla <= '8')
             selecionada = tecla - '1';
         else if (tecla == '0')
             selecionada = MENU_SAIR;
@@ -473,6 +475,55 @@ static void tela_step_stepback(Estado *estado) {
     fechar_janela(janela);
 }
 
+static void tela_memoria_dados(const Estado *estado) {
+    WINDOW *janela = criar_janela(RES_H, RES_W, "Memoria de dados");
+    int deslocamento = 0;
+    int linhas_visiveis = RES_H - 4;
+    int colunas = 2;
+    int por_pagina = linhas_visiveis * colunas;
+    if (!janela) return;
+
+    while (1) {
+        werase(janela);
+        desenhar_moldura(janela, RES_W, "Memoria de dados");
+
+        for (int i = 0; i < por_pagina && i + deslocamento < 256; i++) {
+            int idx = i + deslocamento;
+            int col = (i / linhas_visiveis) * 28;
+            int lin = i % linhas_visiveis;
+            int val = estado->mem_dados[idx];
+
+            if (val != 0)
+                wattron(janela, cor(COR_INFO) | A_BOLD);
+            else
+                wattron(janela, cor(COR_TEXTO) | A_DIM);
+
+            mvwprintw(janela, 2 + lin, 3 + col,
+                      "mem[%3d] = %4d", idx, val);
+
+            if (val != 0)
+                wattroff(janela, cor(COR_INFO) | A_BOLD);
+            else
+                wattroff(janela, cor(COR_TEXTO) | A_DIM);
+        }
+
+        wattron(janela, cor(COR_ALERTA) | A_DIM);
+        mvwprintw(janela, RES_H - 2, 2,
+                  "Setas: rolar | ENTER ou Q: voltar");
+        wattroff(janela, cor(COR_ALERTA) | A_DIM);
+        wrefresh(janela);
+
+        int tecla = wgetch(janela);
+        if (eh_enter(tecla) || tecla == 'q' || tecla == 'Q') break;
+        if (tecla == KEY_DOWN && deslocamento + por_pagina < 256)
+            deslocamento += colunas;
+        else if (tecla == KEY_UP && deslocamento > 0)
+            deslocamento -= colunas;
+    }
+
+    fechar_janela(janela);
+}
+
 static void tela_run(Estado *estado) {
     if (programa_terminou(estado)) {
         mostrar_aviso("Run", "O programa ja foi executado ate o fim.");
@@ -584,6 +635,9 @@ int main(void) {
                 break;
             case MENU_ESTATISTICAS:
                 tela_estatisticas(&estado);
+                break;
+            case MENU_MEMORIA:
+                tela_memoria_dados(&estado);
                 break;
             case MENU_CARREGAR:
             case MENU_SAIR:

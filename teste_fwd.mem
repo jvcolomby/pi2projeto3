@@ -1,0 +1,36 @@
+// ============================================================
+//  teste_fwd.mem — Mini MIPS 8-bit Pipeline
+//  Exercita: forwarding EX/MEM, forwarding MEM/ER,
+//            stall load-use, branch (beq) e jump
+// ============================================================
+//
+//  Resultado esperado:
+//    $1 =  5    $2 =  3    $3 =  8    $4 =  2
+//    $5 =  0    $6 = 10    $7 = 14
+//    mem[0] = 8
+//    Bolhas: 1 (load-use) + 2 (beq tomado) = 3
+//
+// ------------------------------------------------------------
+
+// --- bloco 1: carga de constantes ---
+0100000001000101   // 00: addi $1, $0, 5       | $1 = 5
+0100000010000011   // 01: addi $2, $0, 3       | $2 = 3
+
+// --- bloco 2: aritmetica com forwarding ---
+0000001010011000   // 02: add  $3, $1, $2      | $3 = 8   (fwd EX/MEM $2, MEM/ER $1)
+0000001010100010   // 03: sub  $4, $1, $2      | $4 = 2   (fwd MEM/ER $2)
+0000011100101100   // 04: and  $5, $3, $4      | $5 = 0   (fwd EX/MEM $4, MEM/ER $3)
+0000011100110101   // 05: or   $6, $3, $4      | $6 = 10  (fwd MEM/ER $4)
+
+// --- bloco 3: acesso a memoria + load-use stall ---
+1111000011000000   // 06: sw   $3, 0($0)       | mem[0] = 8
+1011000111000000   // 07: lw   $7, 0($0)       | $7 = 8
+0000111001111000   // 08: add  $7, $7, $1      | $7 = 13  (STALL + fwd MEM/ER do lw)
+
+// --- bloco 4: branch tomado ---
+1000101000000010   // 09: beq  $5, $0, 2       | $5==0 → PC=12 (2 bolhas de flush)
+0100000001111111   // 10: addi $1, $0, -1      | (flushed — nao executa)
+0100000010111111   // 11: addi $2, $0, -1      | (flushed — nao executa)
+
+// --- bloco 5: alvo do branch ---
+0100111111000001   // 12: addi $7, $7, 1       | $7 = 14  (resultado final)
