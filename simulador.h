@@ -124,3 +124,4 @@ void    imprimir_pipeline(Estado *e);
 void    imprimir_estatisticas(Estado *e);
 
 #endif
+
